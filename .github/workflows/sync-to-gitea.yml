@@ -1,0 +1,59 @@
+name: Sync to Gitea
+# sync-version: 4
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Gitea (skip if paused, Gitea ahead, or diverged)
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_SYNC_TOKEN }}
+        run: |
+          GITEA_REPO="${{ github.event.repository.name }}"
+          GITEA_REPO="${GITEA_REPO,,}"
+          BRANCH="${{ github.ref_name }}"
+
+          # Pause check — set GITEA_SYNC_PAUSED=true via /git-sync UI to pause this repo
+          if [ "${{ vars.GITEA_SYNC_PAUSED }}" = "true" ]; then
+            echo "[SYNC] status=paused branch=${BRANCH}"
+            exit 0
+          fi
+
+          git remote remove gitea 2>/dev/null || true
+          git remote add gitea https://ceo:${GITEA_TOKEN}@git.kunjjee.com/ceo/${GITEA_REPO}.git
+
+          # Fetch only this branch from Gitea (never fetches other branches)
+          timeout 60 git fetch gitea "${BRANCH}" 2>/dev/null || true
+
+          if git rev-parse "gitea/${BRANCH}" >/dev/null 2>&1; then
+            GITHUB_AHEAD=$(git rev-list "gitea/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
+            GITEA_AHEAD=$(git rev-list "HEAD..gitea/${BRANCH}" --count 2>/dev/null || echo 0)
+
+            if [ "$GITHUB_AHEAD" -gt "0" ] && [ "$GITEA_AHEAD" -gt "0" ]; then
+              echo "[SYNC] status=skip reason=diverged branch=${BRANCH} github_ahead=${GITHUB_AHEAD} gitea_ahead=${GITEA_AHEAD}"
+              exit 0
+            fi
+
+            if [ "$GITEA_AHEAD" -gt "0" ]; then
+              echo "[SYNC] status=skip reason=gitea_ahead branch=${BRANCH} gitea_ahead=${GITEA_AHEAD}"
+              exit 0
+            fi
+
+            if [ "$GITHUB_AHEAD" -eq "0" ] && [ "$GITEA_AHEAD" -eq "0" ]; then
+              echo "[SYNC] status=noop branch=${BRANCH}"
+              exit 0
+            fi
+          fi
+
+          echo "[SYNC] status=push branch=${BRANCH}"
+          git push gitea HEAD:"${BRANCH}"
