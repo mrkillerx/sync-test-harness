@@ -1,5 +1,5 @@
 name: Sync to Gitea
-# sync-version: 5
+# sync-version: 4
 
 on:
   push:
@@ -15,10 +15,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to Gitea (skip if paused, branch-filtered, Gitea ahead, or diverged)
+      - name: Push to Gitea (skip if paused, Gitea ahead, or diverged)
         env:
           GITEA_TOKEN: ${{ secrets.GITEA_SYNC_TOKEN }}
-          BRANCH_FILTER: ${{ vars.GITEA_SYNC_BRANCH_FILTER }}
         run: |
           GITEA_REPO="${{ github.event.repository.name }}"
           GITEA_REPO="${GITEA_REPO,,}"
@@ -28,25 +27,6 @@ jobs:
           if [ "${{ vars.GITEA_SYNC_PAUSED }}" = "true" ]; then
             echo "[SYNC] status=paused branch=${BRANCH}"
             exit 0
-          fi
-
-          # Branch filter check — comma-separated glob patterns (e.g. "main,develop,release/*")
-          # set via /git-sync UI Settings drawer. Empty/unset = sync all branches.
-          if [ -n "${BRANCH_FILTER}" ]; then
-            MATCHED=0
-            IFS=',' read -ra PATTERNS <<< "${BRANCH_FILTER}"
-            for raw in "${PATTERNS[@]}"; do
-              # trim whitespace
-              pat="$(echo "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              [ -z "$pat" ] && continue
-              case "$BRANCH" in
-                $pat) MATCHED=1; break ;;
-              esac
-            done
-            if [ "$MATCHED" -eq "0" ]; then
-              echo "[SYNC] status=skip reason=branch_filter branch=${BRANCH} filter=${BRANCH_FILTER}"
-              exit 0
-            fi
           fi
 
           git remote remove gitea 2>/dev/null || true
