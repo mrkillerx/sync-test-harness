@@ -15,38 +15,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to Gitea (skip if paused, branch-filtered, Gitea ahead, or diverged)
+      - name: Push to Gitea (skip if paused, Gitea ahead, or diverged)
         env:
           GITEA_TOKEN: ${{ secrets.GITEA_SYNC_TOKEN }}
-          BRANCH_FILTER: ${{ vars.GITEA_SYNC_BRANCH_FILTER }}
         run: |
-          GITEA_REPO="${{ github.event.repository.name }}"
-          GITEA_REPO="${GITEA_REPO,,}"
+          # Resolve Gitea repo name. Two naming conventions exist:
+          #   - New (current):  ceo/{ghuser}-{repo}     (provisionCoolifyApp)
+          #   - Legacy:         ceo/{repo}              (early ai-company-backend etc.)
+          # Pre-v5 workflows hardcoded the legacy form which 404'd on every
+          # non-legacy repo and broke sync for 21+ repos. v5 probes both via
+          # git ls-remote, prefers prefixed, falls back to legacy, no-ops if
+          # neither exists (avoids creating a phantom Gitea repo on first push).
           BRANCH="${{ github.ref_name }}"
+          GITEA_REPO_PREFIXED="${{ github.repository_owner }}-${{ github.event.repository.name }}"
+          GITEA_REPO_PREFIXED="${GITEA_REPO_PREFIXED,,}"
+          GITEA_REPO_LEGACY="${{ github.event.repository.name }}"
+          GITEA_REPO_LEGACY="${GITEA_REPO_LEGACY,,}"
+          GITEA_BASE="https://ceo:${GITEA_TOKEN}@git.kunjjee.com"
 
-          # Pause check — set GITEA_SYNC_PAUSED=true via /git-sync UI to pause this repo
+          if git ls-remote "${GITEA_BASE}/ceo/${GITEA_REPO_PREFIXED}.git" HEAD >/dev/null 2>&1; then
+            GITEA_REPO="${GITEA_REPO_PREFIXED}"
+          elif git ls-remote "${GITEA_BASE}/ceo/${GITEA_REPO_LEGACY}.git" HEAD >/dev/null 2>&1; then
+            GITEA_REPO="${GITEA_REPO_LEGACY}"
+          else
+            echo "[SYNC] status=skip reason=no_gitea_repo tried=${GITEA_REPO_PREFIXED},${GITEA_REPO_LEGACY}"
+            exit 0
+          fi
+          echo "[SYNC] resolved gitea_repo=${GITEA_REPO}"
+
+          # Pause check â€” set GITEA_SYNC_PAUSED=true via /git-sync UI to pause this repo
           if [ "${{ vars.GITEA_SYNC_PAUSED }}" = "true" ]; then
             echo "[SYNC] status=paused branch=${BRANCH}"
             exit 0
-          fi
-
-          # Branch filter check — comma-separated glob patterns (e.g. "main,develop,release/*")
-          # set via /git-sync UI Settings drawer. Empty/unset = sync all branches.
-          if [ -n "${BRANCH_FILTER}" ]; then
-            MATCHED=0
-            IFS=',' read -ra PATTERNS <<< "${BRANCH_FILTER}"
-            for raw in "${PATTERNS[@]}"; do
-              # trim whitespace
-              pat="$(echo "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              [ -z "$pat" ] && continue
-              case "$BRANCH" in
-                $pat) MATCHED=1; break ;;
-              esac
-            done
-            if [ "$MATCHED" -eq "0" ]; then
-              echo "[SYNC] status=skip reason=branch_filter branch=${BRANCH} filter=${BRANCH_FILTER}"
-              exit 0
-            fi
           fi
 
           git remote remove gitea 2>/dev/null || true
